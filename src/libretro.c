@@ -165,12 +165,16 @@ static void build_overlay_path(const char* rom_path, char* overlay_path, size_t 
 // Load controller base PNG from embedded data
 static void load_controller_base(void)
 {
+    int width, height, channels, y, x;
+    unsigned char* img_data;
+    unsigned char* pixel;
+    unsigned int alpha, r, g, b;
+    
     if (controller_base_loaded) {
         return;
     }
     
-    int width, height, channels;
-    unsigned char* img_data = stbi_load_from_memory(keypad_frame_graphic, keypad_frame_graphic_len, &width, &height, &channels, 4);
+    img_data = stbi_load_from_memory(keypad_frame_graphic, keypad_frame_graphic_len, &width, &height, &channels, 4);
     
     if (img_data) {
         controller_base_width = width;
@@ -201,12 +205,16 @@ static void load_controller_base(void)
 // Load banner PNG from embedded data
 static void load_banner(void)
 {
+    int width, height, channels, y, x;
+    unsigned char* img_data;
+    unsigned char* pixel;
+    unsigned int alpha, r, g, b;
+    
     if (banner_loaded) {
         return;
     }
     
-    int width, height, channels;
-    unsigned char* img_data = stbi_load_from_memory(banner, banner_len, &width, &height, &channels, 4);
+    img_data = stbi_load_from_memory(banner, banner_len, &width, &height, &channels, 4);
     
     if (!img_data) {
         return;
@@ -239,22 +247,26 @@ static void load_banner(void)
 // Build overlay path from ROM name - looks in system/freeintv_overlays folder
 static void build_overlay_path(const char* rom_path, char* overlay_path, size_t overlay_path_size, const char* system_dir)
 {
+    const char* filename;
+    const char* last_slash;
+    char rom_basename[512];
+    char* ext;
+    
     if (!rom_path || !overlay_path || overlay_path_size == 0 || !system_dir) {
         overlay_path[0] = '\0';
         return;
     }
     
     // Get ROM filename without extension
-    const char* filename = rom_path;
-    const char* last_slash = strrchr(rom_path, '\\');
+    filename = rom_path;
+    last_slash = strrchr(rom_path, '\\');
     if (!last_slash) last_slash = strrchr(rom_path, '/');
     if (last_slash) filename = last_slash + 1;
     
     // Remove extension
-    char rom_basename[512];
     strncpy(rom_basename, filename, sizeof(rom_basename) - 1);
     rom_basename[sizeof(rom_basename) - 1] = '\0';
-    char* ext = strrchr(rom_basename, '.');
+    ext = strrchr(rom_basename, '.');
     if (ext) *ext = '\0';
     
     // Build path: [system_dir]\freeintv_overlays\[rom_name].png
@@ -269,11 +281,17 @@ static void build_overlay_path(const char* rom_path, char* overlay_path, size_t 
 // Load overlay for ROM
 static void load_overlay_for_rom(const char* rom_path, const char* system_dir)
 {
+    char overlay_path[1024], jpg_path[1024];
+    int width, height, channels, y, x, from_file;
+    unsigned char* img_data;
+    unsigned char* pixel;
+    unsigned int alpha, r, g, b;
+    char* ext;
+    
     if (!rom_path || !system_dir || !multi_screen_enabled) {
         return;
     }
     
-    char overlay_path[1024];
     build_overlay_path(rom_path, overlay_path, sizeof(overlay_path), system_dir);
     
     overlay_loaded = 0;
@@ -283,15 +301,13 @@ static void load_overlay_for_rom(const char* rom_path, const char* system_dir)
         overlay_buffer = NULL;
     }
     
-    int width, height, channels;
-    unsigned char* img_data = stbi_load(overlay_path, &width, &height, &channels, 4);
-    int from_file = 1;
+    img_data = stbi_load(overlay_path, &width, &height, &channels, 4);
+    from_file = 1;
     
     if (!img_data) {
         // Try JPG format
-        char jpg_path[1024];
         strncpy(jpg_path, overlay_path, sizeof(jpg_path) - 1);
-        char* ext = strrchr(jpg_path, '.');
+        ext = strrchr(jpg_path, '.');
         if (ext) {
             strcpy(ext, ".jpg");
             img_data = stbi_load(jpg_path, &width, &height, &channels, 4);
@@ -362,11 +378,10 @@ static void render_multi_screen(void)
     extern unsigned int frame[352 * 224];
     int game_x_offset, keypad_x_offset;
     int util_bg_x1, util_bg_x2, util_bg_y1, util_bg_y2;
-    unsigned int util_bg_color;
     int src_y, src_x, workspace_x, workspace_y;
     unsigned int bg_color;
     int overlay_x, overlay_y, overlay_workspace_x, overlay_workspace_y;
-    unsigned int overlay_pixel;
+    unsigned int overlay_pixel, overlay_pixel_val;
     int banner_start_x, banner_start_y;
     int banner_x, banner_y;
     int banner_workspace_x, banner_workspace_y;
@@ -374,10 +389,22 @@ static void render_multi_screen(void)
     unsigned int existing;
     int blended_r, blended_g, blended_b;
     float alpha;
-    int button_idx, btn_y, btn_x, utility_bg_color;
+    int button_idx, btn_y, btn_x;
     int color;
     int hotspot_idx, workspace_idx;
-    int layer;
+    int layer, offset, corner_cut;
+    unsigned int border_colors[7];
+    int util_border_x1, util_border_x2, util_border_y1, util_border_y2;
+    unsigned int pixel, base_pixel;
+    unsigned int inv_alpha;
+    unsigned int base_r, base_g, base_b;
+    unsigned int bg_r, bg_g, bg_b;
+    int ctrl_base_x_offset, overlay_x_offset, ctrl_x;
+    unsigned int utility_bg_color;
+    unsigned int r, g, b;
+    unsigned int existing_r, existing_g, existing_b;
+    int hotspot_x_adjust;
+    unsigned int highlight_color;
     
     if (!multi_screen_enabled) return;
     
@@ -405,13 +432,13 @@ static void render_multi_screen(void)
     util_bg_y2 = 600;
     
     /* More visible dark background color - dark blue with better contrast than near-black */
-    util_bg_color = 0xFF1a2a3a;  /* Dark blue-gray with visible contrast to black */
+    utility_bg_color = 0xFF1a2a3a;  /* Dark blue-gray with visible contrast to black */
     
     for (y = util_bg_y1; y < util_bg_y2; y++) {
         if (y >= WORKSPACE_HEIGHT) break;
         for (x = util_bg_x1; x < util_bg_x2; x++) {
             if (x < WORKSPACE_WIDTH) {
-                multi_buffer[y * WORKSPACE_WIDTH + x] = util_bg_color;
+                multi_buffer[y * WORKSPACE_WIDTH + x] = utility_bg_color;
             }
         }
     }
@@ -446,8 +473,8 @@ static void render_multi_screen(void)
     }
     
     // Layer overlay and controller base
-    int ctrl_base_x_offset = (KEYPAD_WIDTH - controller_base_width) / 2;
-    int overlay_x_offset = (KEYPAD_WIDTH - overlay_width) / 2;
+    ctrl_base_x_offset = (KEYPAD_WIDTH - controller_base_width) / 2;
+    overlay_x_offset = (KEYPAD_WIDTH - overlay_width) / 2;
     
     
     for (y = 0; y < KEYPAD_HEIGHT && y < WORKSPACE_HEIGHT; ++y) {
@@ -457,24 +484,24 @@ static void render_multi_screen(void)
             
             if (workspace_x >= WORKSPACE_WIDTH || workspace_y >= WORKSPACE_HEIGHT) continue;
             
-            unsigned int pixel = bg_color;
+            pixel = bg_color;
             
             // If overlay is loaded, show overlay with controller base on top
             if (overlay_loaded && overlay_buffer && y < overlay_height) {
-                int overlay_x = x - overlay_x_offset;
+                overlay_x = x - overlay_x_offset;
                 if (overlay_x >= 0 && overlay_x < overlay_width) {
-                    unsigned int overlay_pixel = overlay_buffer[y * overlay_width + overlay_x];
-                    if ((overlay_pixel >> 24) & 0xFF) {
-                        pixel = overlay_pixel;
+                    overlay_pixel_val = overlay_buffer[y * overlay_width + overlay_x];
+                    if ((overlay_pixel_val >> 24) & 0xFF) {
+                        pixel = overlay_pixel_val;
                     }
                 }
             }
             // Only use controller base if NO overlay is loaded
             else if (!overlay_loaded && controller_base_loaded && controller_base && y < controller_base_height) {
-                int ctrl_x = x - ctrl_base_x_offset;
+                ctrl_x = x - ctrl_base_x_offset;
                 if (ctrl_x >= 0 && ctrl_x < controller_base_width) {
-                    unsigned int base_pixel = controller_base[y * controller_base_width + ctrl_x];
-                    unsigned int alpha = (base_pixel >> 24) & 0xFF;
+                    base_pixel = controller_base[y * controller_base_width + ctrl_x];
+                    alpha = (base_pixel >> 24) & 0xFF;
                     if (alpha > 0) {
                         pixel = base_pixel;
                     }
@@ -483,28 +510,28 @@ static void render_multi_screen(void)
             
             // Layer controller base on top (with overlay showing through transparent areas)
             if (overlay_loaded && controller_base_loaded && controller_base && y < controller_base_height) {
-                int ctrl_x = x - ctrl_base_x_offset;
+                ctrl_x = x - ctrl_base_x_offset;
                 if (ctrl_x >= 0 && ctrl_x < controller_base_width) {
-                    unsigned int base_pixel = controller_base[y * controller_base_width + ctrl_x];
-                    unsigned int alpha = (base_pixel >> 24) & 0xFF;
+                    base_pixel = controller_base[y * controller_base_width + ctrl_x];
+                    alpha = (base_pixel >> 24) & 0xFF;
                     if (alpha > 0) {
                         if (alpha == 255) {
                             // Fully opaque: use controller base
                             pixel = base_pixel;
                         } else {
                             // Semi-transparent: blend controller base over overlay
-                            unsigned int inv_alpha = 255 - alpha;
-                            unsigned int base_r = (base_pixel >> 16) & 0xFF;
-                            unsigned int base_g = (base_pixel >> 8) & 0xFF;
-                            unsigned int base_b = base_pixel & 0xFF;
+                            inv_alpha = 255 - alpha;
+                            base_r = (base_pixel >> 16) & 0xFF;
+                            base_g = (base_pixel >> 8) & 0xFF;
+                            base_b = base_pixel & 0xFF;
                             
-                            unsigned int bg_r = (pixel >> 16) & 0xFF;
-                            unsigned int bg_g = (pixel >> 8) & 0xFF;
-                            unsigned int bg_b = pixel & 0xFF;
+                            bg_r = (pixel >> 16) & 0xFF;
+                            bg_g = (pixel >> 8) & 0xFF;
+                            bg_b = pixel & 0xFF;
                             
-                            unsigned int blended_r = (base_r * alpha + bg_r * inv_alpha) / 255;
-                            unsigned int blended_g = (base_g * alpha + bg_g * inv_alpha) / 255;
-                            unsigned int blended_b = (base_b * alpha + bg_b * inv_alpha) / 255;
+                            blended_r = (base_r * alpha + bg_r * inv_alpha) / 255;
+                            blended_g = (base_g * alpha + bg_g * inv_alpha) / 255;
+                            blended_b = (base_b * alpha + bg_b * inv_alpha) / 255;
                             
                             pixel = 0xFF000000 | (blended_r << 16) | (blended_g << 8) | blended_b;
                         }
@@ -528,8 +555,8 @@ static void render_multi_screen(void)
                 workspace_y = 448 + banner_y;                if (workspace_x >= WORKSPACE_WIDTH || workspace_y >= WORKSPACE_HEIGHT) continue;
                 if (workspace_x < 0) continue;
                 
-                unsigned int banner_pixel = banner_buffer[banner_y * banner_width + banner_x];
-                unsigned int alpha = (banner_pixel >> 24) & 0xFF;
+                banner_pixel = banner_buffer[banner_y * banner_width + banner_x];
+                alpha = (banner_pixel >> 24) & 0xFF;
                 
                 if (alpha > 0) {
                     // Blend with alpha
@@ -537,20 +564,20 @@ static void render_multi_screen(void)
                         multi_buffer[workspace_y * WORKSPACE_WIDTH + workspace_x] = banner_pixel;
                     } else {
                         // Alpha blend
-                        unsigned int existing = multi_buffer[workspace_y * WORKSPACE_WIDTH + workspace_x];
-                        unsigned int inv_alpha = 255 - alpha;
+                        existing = multi_buffer[workspace_y * WORKSPACE_WIDTH + workspace_x];
+                        inv_alpha = 255 - alpha;
                         
-                        unsigned int r = ((banner_pixel >> 16) & 0xFF);
-                        unsigned int g = ((banner_pixel >> 8) & 0xFF);
-                        unsigned int b = (banner_pixel & 0xFF);
+                        r = ((banner_pixel >> 16) & 0xFF);
+                        g = ((banner_pixel >> 8) & 0xFF);
+                        b = (banner_pixel & 0xFF);
                         
-                        unsigned int existing_r = ((existing >> 16) & 0xFF);
-                        unsigned int existing_g = ((existing >> 8) & 0xFF);
-                        unsigned int existing_b = (existing & 0xFF);
+                        existing_r = ((existing >> 16) & 0xFF);
+                        existing_g = ((existing >> 8) & 0xFF);
+                        existing_b = (existing & 0xFF);
                         
-                        unsigned int blended_r = (r * alpha + existing_r * inv_alpha) / 255;
-                        unsigned int blended_g = (g * alpha + existing_g * inv_alpha) / 255;
-                        unsigned int blended_b = (b * alpha + existing_b * inv_alpha) / 255;
+                        blended_r = (r * alpha + existing_r * inv_alpha) / 255;
+                        blended_g = (g * alpha + existing_g * inv_alpha) / 255;
+                        blended_b = (b * alpha + existing_b * inv_alpha) / 255;
                         
                         multi_buffer[workspace_y * WORKSPACE_WIDTH + workspace_x] = 0xFF000000 | (blended_r << 16) | (blended_g << 8) | blended_b;
                     }
@@ -571,21 +598,19 @@ static void render_multi_screen(void)
     
     // === UTILITY SECTION BORDER - 7 LAYER GRADIENT WITH 45° CORNERS (gold retro palette) ===
     // Colors from outside to inside: #605117, #927b18, #c7a814, #ffd700, #c7a814, #927b18, #605117
-    int util_border_x1 = game_x_offset;
-    int util_border_x2 = game_x_offset + GAME_SCREEN_WIDTH;
-    int util_border_y1 = 448;
-    int util_border_y2 = 600;
+    util_border_x1 = game_x_offset;
+    util_border_x2 = game_x_offset + GAME_SCREEN_WIDTH;
+    util_border_y1 = 448;
+    util_border_y2 = 600;
     
     // 7-layer color palette (ARGB format with full opacity)
-    unsigned int border_colors[7] = {
-        0xFF605117,  // Layer 0 (outermost): Dark gold/brown
-        0xFF927b18,  // Layer 1: Medium-dark gold
-        0xFFc7a814,  // Layer 2: Medium gold
-        0xFFffd700,  // Layer 3 (center): Bright gold
-        0xFFc7a814,  // Layer 4: Medium gold (mirror)
-        0xFF927b18,  // Layer 5: Medium-dark gold (mirror)
-        0xFF605117   // Layer 6 (innermost): Dark gold/brown (mirror)
-    };
+    border_colors[0] = 0xFF605117;  // Layer 0 (outermost): Dark gold/brown
+    border_colors[1] = 0xFF927b18;  // Layer 1: Medium-dark gold
+    border_colors[2] = 0xFFc7a814;  // Layer 2: Medium gold
+    border_colors[3] = 0xFFffd700;  // Layer 3 (center): Bright gold
+    border_colors[4] = 0xFFc7a814;  // Layer 4: Medium gold (mirror)
+    border_colors[5] = 0xFF927b18;  // Layer 5: Medium-dark gold (mirror)
+    border_colors[6] = 0xFF605117;  // Layer 6 (innermost): Dark gold/brown (mirror)
     
     /* Draw each layer from outside to inside */
     for (layer = 0; layer < 7; layer++) {
@@ -666,7 +691,7 @@ static void render_multi_screen(void)
     /* === HOTSPOT HIGHLIGHTING - Show which buttons are pressed by touch === */
     /* Highlight all pressed hotspots (from touch input detection) */
     /* When display_swap is true, hotspots translate from right side to left side */
-    int hotspot_x_adjust = display_swap ? (-GAME_SCREEN_WIDTH) : 0;
+    hotspot_x_adjust = display_swap ? (-GAME_SCREEN_WIDTH) : 0;
     
     for (i = 0; i < OVERLAY_HOTSPOT_COUNT; i++) {
         if (hotspot_pressed[i]) {
@@ -678,21 +703,21 @@ static void render_multi_screen(void)
                 for (x = h->x + hotspot_x_adjust; x < h->x + h->width + hotspot_x_adjust; ++x) {
                     if (x < 0 || x >= WORKSPACE_WIDTH) continue;
                     
-                    unsigned int existing = multi_buffer[y * WORKSPACE_WIDTH + x];
-                    unsigned int alpha = (highlight_color >> 24) & 0xFF;
-                    unsigned int inv_alpha = 255 - alpha;
+                    existing = multi_buffer[y * WORKSPACE_WIDTH + x];
+                    alpha = (highlight_color >> 24) & 0xFF;
+                    inv_alpha = 255 - alpha;
                     
-                    unsigned int r = ((highlight_color >> 16) & 0xFF);
-                    unsigned int g = ((highlight_color >> 8) & 0xFF);
-                    unsigned int b = (highlight_color & 0xFF);
+                    r = ((highlight_color >> 16) & 0xFF);
+                    g = ((highlight_color >> 8) & 0xFF);
+                    b = (highlight_color & 0xFF);
                     
-                    unsigned int existing_r = ((existing >> 16) & 0xFF);
-                    unsigned int existing_g = ((existing >> 8) & 0xFF);
-                    unsigned int existing_b = (existing & 0xFF);
+                    existing_r = ((existing >> 16) & 0xFF);
+                    existing_g = ((existing >> 8) & 0xFF);
+                    existing_b = (existing & 0xFF);
                     
-                    unsigned int blended_r = (r * alpha + existing_r * inv_alpha) / 255;
-                    unsigned int blended_g = (g * alpha + existing_g * inv_alpha) / 255;
-                    unsigned int blended_b = (b * alpha + existing_b * inv_alpha) / 255;
+                    blended_r = (r * alpha + existing_r * inv_alpha) / 255;
+                    blended_g = (g * alpha + existing_g * inv_alpha) / 255;
+                    blended_b = (b * alpha + existing_b * inv_alpha) / 255;
                     
                     multi_buffer[y * WORKSPACE_WIDTH + x] = 0xFF000000 | (blended_r << 16) | (blended_g << 8) | blended_b;
                 }
@@ -726,14 +751,29 @@ void quit(int state);
 // Process utility button touchscreen input and trigger RetroArch commands
 static void process_toggle_button_input(void)
 {
+    int16_t ptr_x_normalized;
+    int16_t ptr_y_normalized;
+    int mouse_button;
+    int mouse_x;
+    int mouse_y;
+    int banner_start_x;
+    int banner_start_y;
+    int toggle_x;
+    int toggle_y;
+    int toggle_radius;
+    int dx;
+    int dy;
+    int distance_sq;
+    int is_over;
+    
     // Get pointer/touchscreen input
-    int16_t ptr_x_normalized = (int16_t)InputState(0, RETRO_DEVICE_POINTER, 0, RETRO_DEVICE_ID_POINTER_X);
-    int16_t ptr_y_normalized = (int16_t)InputState(0, RETRO_DEVICE_POINTER, 0, RETRO_DEVICE_ID_POINTER_Y);
-    int mouse_button = InputState(0, RETRO_DEVICE_POINTER, 0, RETRO_DEVICE_ID_POINTER_PRESSED);
+    ptr_x_normalized = (int16_t)InputState(0, RETRO_DEVICE_POINTER, 0, RETRO_DEVICE_ID_POINTER_X);
+    ptr_y_normalized = (int16_t)InputState(0, RETRO_DEVICE_POINTER, 0, RETRO_DEVICE_ID_POINTER_Y);
+    mouse_button = InputState(0, RETRO_DEVICE_POINTER, 0, RETRO_DEVICE_ID_POINTER_PRESSED);
     
     // Transform from normalized coordinates to pixel coordinates
-    int mouse_x = 0;
-    int mouse_y = 0;
+    mouse_x = 0;
+    mouse_y = 0;
     if (ptr_x_normalized != 0 || ptr_y_normalized != 0 || mouse_button) {
         mouse_x = ((int32_t)ptr_x_normalized + 32767) * WORKSPACE_WIDTH / 65534;
         mouse_y = ((int32_t)ptr_y_normalized + 32767) * WORKSPACE_HEIGHT / 65534;
@@ -749,19 +789,19 @@ static void process_toggle_button_input(void)
     // Margins: 36px from top/bottom, 13px from right
     // Center: (651, 76) relative to banner
     
-    int banner_start_x = display_swap ? KEYPAD_WIDTH : 0;
-    int banner_start_y = 448;
+    banner_start_x = display_swap ? KEYPAD_WIDTH : 0;
+    banner_start_y = 448;
     
     // Toggle button center in workspace coordinates
-    int toggle_x = banner_start_x + 651;  // Banner X + center X of gold box
-    int toggle_y = banner_start_y + 76;   // Banner Y + center Y of gold box
-    int toggle_radius = 45;  // Approximately half diagonal of 80×80 box for circular touch detection
+    toggle_x = banner_start_x + 651;  // Banner X + center X of gold box
+    toggle_y = banner_start_y + 76;   // Banner Y + center Y of gold box
+    toggle_radius = 45;  // Approximately half diagonal of 80×80 box for circular touch detection
     
     // Check if touch is within toggle button area (circular hotspot)
-    int dx = mouse_x - toggle_x;
-    int dy = mouse_y - toggle_y;
-    int distance_sq = dx * dx + dy * dy;
-    int is_over = (distance_sq <= toggle_radius * toggle_radius);
+    dx = mouse_x - toggle_x;
+    dy = mouse_y - toggle_y;
+    distance_sq = dx * dx + dy * dy;
+    is_over = (distance_sq <= toggle_radius * toggle_radius);
     
     if (is_over && mouse_button) {
         if (!toggle_button_pressed) {
@@ -782,19 +822,30 @@ static void process_toggle_button_input(void)
 static void process_hotspot_input(void)
 {
     static int call_count = 0;
+    int16_t ptr_x_normalized;
+    int16_t ptr_y_normalized;
+    int mouse_button;
+    int mouse_x;
+    int mouse_y;
+    int i;
+    overlay_hotspot_t* h;
+    int hotspot_x;
+    int is_over;
+    int hotspot_input;
+    
     call_count++;
     
     // Get pointer/touchscreen input (RETRO_DEVICE_POINTER for touchscreen on Android)
     // Pointer returns coordinates in -32767 to 32767 range (normalized, not pixel coords)
-    int16_t ptr_x_normalized = (int16_t)InputState(0, RETRO_DEVICE_POINTER, 0, RETRO_DEVICE_ID_POINTER_X);
-    int16_t ptr_y_normalized = (int16_t)InputState(0, RETRO_DEVICE_POINTER, 0, RETRO_DEVICE_ID_POINTER_Y);
-    int mouse_button = InputState(0, RETRO_DEVICE_POINTER, 0, RETRO_DEVICE_ID_POINTER_PRESSED);
+    ptr_x_normalized = (int16_t)InputState(0, RETRO_DEVICE_POINTER, 0, RETRO_DEVICE_ID_POINTER_X);
+    ptr_y_normalized = (int16_t)InputState(0, RETRO_DEVICE_POINTER, 0, RETRO_DEVICE_ID_POINTER_Y);
+    mouse_button = InputState(0, RETRO_DEVICE_POINTER, 0, RETRO_DEVICE_ID_POINTER_PRESSED);
     
     // Transform from normalized coordinates (-32767 to 32767) to pixel coordinates (0 to WORKSPACE_WIDTH/HEIGHT)
     // Formula: pixel = (normalized + 32767) / 65534 * workspace_size
     // This maps -32767 -> 0, 0 -> 50% of screen, 32767 -> 100%
-    int mouse_x = 0;
-    int mouse_y = 0;
+    mouse_x = 0;
+    mouse_y = 0;
     if (ptr_x_normalized != 0 || ptr_y_normalized != 0 || mouse_button) {
         // Transform coordinates
         mouse_x = ((int32_t)ptr_x_normalized + 32767) * WORKSPACE_WIDTH / 65534;
@@ -807,15 +858,15 @@ static void process_hotspot_input(void)
     }
     
     // Track pressed hotspots
-    for (int i = 0; i < OVERLAY_HOTSPOT_COUNT; i++)
+    for (i = 0; i < OVERLAY_HOTSPOT_COUNT; i++)
     {
-        overlay_hotspot_t* h = &overlay_hotspots[i];
+        h = &overlay_hotspots[i];
         
         // When display_swap is true, keypad moves to LEFT (0) and game moves to RIGHT (370)
         // Hotspots are defined with keypad on RIGHT (x starts at 704), so translate them
         // In normal mode: hotspot at original x position
         // In swapped mode: subtract GAME_SCREEN_WIDTH (704) to move to LEFT side
-        int hotspot_x = h->x;
+        hotspot_x = h->x;
         if (display_swap) {
             // Translate hotspot from RIGHT side to LEFT side
             // Original x is ~750-883 (right side), new x should be ~46-179 (left side, same relative position)
@@ -823,7 +874,7 @@ static void process_hotspot_input(void)
         }
         
         // Check if mouse is over this hotspot
-        int is_over = (mouse_x >= hotspot_x && mouse_x < hotspot_x + h->width &&
+        is_over = (mouse_x >= hotspot_x && mouse_x < hotspot_x + h->width &&
                        mouse_y >= h->y && mouse_y < h->y + h->height);
         
         if (is_over && mouse_button)
@@ -846,8 +897,8 @@ static void process_hotspot_input(void)
     }
     
     // Build controller input from pressed hotspots (including held buttons from previous frames)
-    int hotspot_input = 0;
-    for (int i = 0; i < OVERLAY_HOTSPOT_COUNT; i++)
+    hotspot_input = 0;
+    for (i = 0; i < OVERLAY_HOTSPOT_COUNT; i++)
     {
         // Send hotspot input if currently pressed
         if (hotspot_pressed[i])
@@ -1060,23 +1111,32 @@ void retro_unload_game(void)
 void retro_run(void)
 {
 	int c, i, j, k, l;
-	int showKeypad0 = false;
-	int showKeypad1 = false;
+	int showKeypad0;
+	int showKeypad1;
+	bool options_updated;
+	static int debug_frame_count = 0;
+	int px;
+	int py;
+	int pp;
+	FILE *f;
+	int any_hotspot_pressed;
+	int h;
+	
+	showKeypad0 = false;
+	showKeypad1 = false;
 
-	bool options_updated  = false;
 	if (Environ(RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE, &options_updated) && options_updated)
 		check_variables(false);
 
 	InputPoll();
 	
 	// DEBUG: Check pointer input at the start of retro_run and write to file
-	static int debug_frame_count = 0;
 	if (debug_frame_count < 300) {
-		int px = InputState(0, RETRO_DEVICE_POINTER, 0, RETRO_DEVICE_ID_POINTER_X);
-		int py = InputState(0, RETRO_DEVICE_POINTER, 0, RETRO_DEVICE_ID_POINTER_Y);
-		int pp = InputState(0, RETRO_DEVICE_POINTER, 0, RETRO_DEVICE_ID_POINTER_PRESSED);
+		px = InputState(0, RETRO_DEVICE_POINTER, 0, RETRO_DEVICE_ID_POINTER_X);
+		py = InputState(0, RETRO_DEVICE_POINTER, 0, RETRO_DEVICE_ID_POINTER_Y);
+		pp = InputState(0, RETRO_DEVICE_POINTER, 0, RETRO_DEVICE_ID_POINTER_PRESSED);
 		
-		FILE *f = fopen("/storage/emulated/0/Download/freeintv_pointer_debug.txt", "a");
+		f = fopen("/storage/emulated/0/Download/freeintv_pointer_debug.txt", "a");
 		if (f) {
 			fclose(f);
 		}
@@ -1214,8 +1274,8 @@ void retro_run(void)
 			
 			// Keep regular controller input for compatibility with non-overlay gameplay
 			// If no hotspot is pressed, fall back to standard controller input
-			int any_hotspot_pressed = 0;
-			for (int h = 0; h < OVERLAY_HOTSPOT_COUNT; h++)
+			any_hotspot_pressed = 0;
+			for (h = 0; h < OVERLAY_HOTSPOT_COUNT; h++)
 			{
 				if (hotspot_pressed[h])
 				{
